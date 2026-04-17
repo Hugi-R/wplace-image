@@ -1,0 +1,13 @@
+[package]
+name = "sqlite-ext"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow = "1.0.100"
+rusqlite = { version = "0.31.0", features = ["loadable_extension", "functions"] }
+wimage = { path = "../wimage" }
+

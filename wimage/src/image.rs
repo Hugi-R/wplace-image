@@ -19,6 +19,10 @@ impl Clone for PalettedImage {
 }
 
 impl PalettedImage {
+    pub fn from_compressed_bytes(compressed: &[u8]) -> anyhow::Result<Self> {
+        compressed_bytes_to_paletted(compressed)
+    }
+
     pub fn from_png<R: BufRead + Seek>(reader: R) -> anyhow::Result<Self> {
         png_to_paletted(reader)
     }
