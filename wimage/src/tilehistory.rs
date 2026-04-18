@@ -64,7 +64,7 @@ impl TileHistory {
         Ok(th)
     }
 
-    /// Get the compressed image for the given date_hours, if it exists. Returns None if there is no entry for that date_hours.
+    /// Get the compressed image for the given date_hours, if it exists. Returns an error if there is no entry for that date_hours.
     /// Convenience function to avoid having to deserialize the entire TileHistory if you just want to get a single version of the tile (usually for debugging).
     pub fn raw_get(data: &[u8], date_hours: DateHours) -> anyhow::Result<CompressedImage> {
         if data.len() < 8 {
