@@ -1,6 +1,7 @@
 use crate::{PalettedImage};
 
 impl PalettedImage {
+    /// Downscale the image by a factor of `block_size` using a weighted mode of the pixels in each block.
     pub fn downscale_mode_weighted(&self, weights: &[u32; 256], block_size: usize) -> PalettedImage {
         if block_size == 2 {
             // faster
@@ -9,9 +10,72 @@ impl PalettedImage {
             downscale_mode_weighted(self, weights, block_size)
         }
     }
+
+    /// Create a diff paletted image: pixels that are the same in `self` and `new` are set to DIFF_COLOR,
+    /// pixels that differ are taken from `new`.
+    /// This allows to store only the differences between two images.
+    pub fn diff(&self, new: &PalettedImage) -> (bool, PalettedImage) {
+        diff_paletted(self, new)
+    }
+
+    /// Apply a diff paletted image (produced by `diff`) to `self`, producing the updated paletted image.
+    /// Essentially an uncompressing of the diff.
+    pub fn apply_diff(&self, diff: &PalettedImage) -> PalettedImage {
+        apply_diff_paletted(self, diff)
+    }
 }
 
-fn downscale_mode_weighted(
+/// Create a diff paletted image: pixels that are the same in `base` and `new` are set to DIFF_COLOR,
+/// pixels that differ are taken from `new`.
+/// This allows to store only the differences between two images.
+/// Significant compression can be achieved if the images are similar.
+pub fn diff_paletted(base: &PalettedImage, new: &PalettedImage) -> (bool, PalettedImage) {
+    assert!(base.width == new.width && base.height == new.height);
+
+    let mut out = PalettedImage {
+        width: base.width,
+        height: base.height,
+        indices: vec![0u8; base.width * base.height],
+    };
+
+    let mut any_diff = false;
+    for i in 0..(base.width * base.height) {
+        if base.indices[i] == new.indices[i] {
+            out.indices[i] = crate::palette::DIFF_NO_CHANGE;
+        } else {
+            out.indices[i] = new.indices[i];
+            any_diff = true;
+        }
+    }
+
+    (any_diff, out)
+}
+
+/// Apply a diff paletted image (produced by `diff_paletted`) to a base paletted image,
+/// producing the updated paletted image.
+/// Essentially an uncompressing of the diff.
+pub fn apply_diff_paletted(base: &PalettedImage, diff: &PalettedImage) -> PalettedImage {
+    assert!(base.width == diff.width && base.height == diff.height);
+
+    let mut out = PalettedImage {
+        width: base.width,
+        height: base.height,
+        indices: vec![0u8; base.width * base.height],
+    };
+
+    for i in 0..(base.width * base.height) {
+        if diff.indices[i] == crate::palette::DIFF_NO_CHANGE {
+            out.indices[i] = base.indices[i];
+        } else {
+            out.indices[i] = diff.indices[i];
+        }
+    }
+
+    out
+}
+
+/// Downscale the image by a factor of `block_size` using a weighted mode of the pixels in each block.
+pub fn downscale_mode_weighted(
     img: &PalettedImage,
     weights: &[u32; 256],
     block_size: usize,
@@ -89,7 +153,8 @@ fn downscale_mode_weighted(
     }
 }
 
-fn downscale_mode_weighted_2x2(
+/// Specialized version of downscale_mode_weighted for block_size = 2, which is a common case and can be optimized.
+pub fn downscale_mode_weighted_2x2(
     src: &PalettedImage,
     weights: &[u32; 256],
 ) -> PalettedImage {

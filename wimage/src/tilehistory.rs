@@ -1,4 +1,7 @@
-use std::{collections::{HashMap}, u16};
+use std::{collections::{HashMap}};
+
+use chrono::{DateTime, Utc, Duration as ChronoDuration};
+
 use crate::image::{CompressedImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -17,6 +20,22 @@ impl DateHours {
         DateHours(u32::MAX)
     }
 
+    pub fn from_datetime(dt: DateTime<Utc>) -> Self {
+        let epoch = DateTime::parse_from_rfc3339(Self::EPOCH)
+            .unwrap()
+            .with_timezone(&Utc);
+        let duration = dt.signed_duration_since(epoch);
+        let hours = duration.num_hours() as u32;
+        DateHours(hours)
+    }
+
+    pub fn to_datetime(&self) -> DateTime<Utc> {
+        let epoch = DateTime::parse_from_rfc3339(Self::EPOCH)
+            .unwrap()
+            .with_timezone(&Utc);
+        epoch + ChronoDuration::hours(self.0 as i64)
+    }
+
     pub fn week(&self) -> u32 {
         self.0 / (24 * 7)
     }
@@ -30,20 +49,13 @@ impl DateHours {
 /// Each version is stored as a compressed diff image, keyed by the DateHours timestamp of when that version was created.
 /// By convention, if the first key is 0, then that version is a full image. Otherwise, all versions are diffs that need to be applied on top of an empty tile.
 pub struct TileHistory {
-    pub x: u16,
-    pub y: u16,
     pub imgs: HashMap<DateHours, CompressedImage>
 }
 
 impl TileHistory {
     /// Deserialize a TileHistory from bytes. For the format, see the to_bytes() method.
-    pub fn from_bytes(x: u16, y: u16, data: &[u8]) -> anyhow::Result<TileHistory> {
-        if data.len() < 8 {
-            return Err(anyhow::anyhow!("data too short for TileHistory"));
-        }
+    pub fn from_bytes(data: &[u8]) -> anyhow::Result<TileHistory> {
         let mut th = TileHistory {
-            x,
-            y,
             imgs: HashMap::new(),
         };
         let mut offset = 0;
@@ -131,6 +143,23 @@ impl TileHistory {
             out.extend_from_slice(&(img_data.len() as u32).to_le_bytes());
             out.extend_from_slice(img_data);
         }
+        out
+    }
+
+    pub fn add(&mut self, date_hours: DateHours, paletted: crate::PalettedImage) -> anyhow::Result<()> {
+        let compressed = paletted.to_compressed_bytes()?;
+        self.imgs.insert(date_hours, compressed);
+        Ok(())
+    }
+
+    pub fn get(&self, date_hours: DateHours) -> anyhow::Result<crate::PalettedImage> {
+        let compressed = self.imgs.get(&date_hours).ok_or(anyhow::anyhow!("Version not found"))?;
+        crate::PalettedImage::from_compressed_bytes(&compressed.0)
+    }
+
+    pub fn list(&self) -> Vec<DateHours> {
+        let mut out: Vec<DateHours> = self.imgs.keys().cloned().collect();
+        out.sort();
         out
     }
 }
