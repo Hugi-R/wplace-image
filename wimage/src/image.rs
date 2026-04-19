@@ -40,7 +40,7 @@ impl PalettedImage {
     }
 
     pub fn to_compressed_bytes(&self) -> anyhow::Result<CompressedImage> {
-        Ok(CompressedImage(paletted_to_compressed_bytes(self)?))
+        Ok(CompressedImage(paletted_to_compressed_bytes_level(self, 8)?)) // Between 7-9 is good compression and speed. See compression_bench.rs for benchmarks.
     }
 }
 
@@ -90,7 +90,7 @@ pub fn paletted_to_png<W: Write>(paletted: &PalettedImage, out: W, ignore_diff: 
 ///
 /// Uncompressed format:
 /// [u32 little-endian width][u32 little-endian height][width*height bytes of u8 indices]
-pub fn paletted_to_compressed_bytes(paletted: &PalettedImage) -> anyhow::Result<Vec<u8>> {
+pub fn paletted_to_compressed_bytes_level(paletted: &PalettedImage, level: i32) -> anyhow::Result<Vec<u8>> {
     // Serialize metadata + indices
     let mut out = Vec::with_capacity(8 + paletted.indices.len());
     out.extend(&((paletted.width as u32).to_le_bytes()));
@@ -98,7 +98,7 @@ pub fn paletted_to_compressed_bytes(paletted: &PalettedImage) -> anyhow::Result<
     out.extend(&paletted.indices);
 
     // Compress with zstd
-    let mut enc = zstd::Encoder::new(Vec::new(), 7)?; // level 7 is good compression and speed. Avoid 4-6 and > 10, very bad speed
+    let mut enc = zstd::Encoder::new(Vec::new(), level)?;
     enc.write_all(&out)?;
     let compressed = enc.finish()?;
 
@@ -184,11 +184,12 @@ fn expand_to_rgba8(color: &ColorType, bit_depth: &BitDepth, buf: &[u8], info: &p
             }
         }
         ColorType::Indexed => {
-            // buf contains indices, we only support 8-bit for wplace
+            // buf contains indices, possibly packed if bit depth < 8.
             let pixel_count = (info.width as usize) * (info.height as usize);
             let indices = match bit_depth {
                 BitDepth::Eight => buf.to_vec(),
-                _ => return Err(anyhow!("unsupported bit depth for Indexed: {:?}", bit_depth).into()),
+                BitDepth::Sixteen => return Err(anyhow!("unexpected 16-bit for Indexed").into()),
+                BitDepth::One | BitDepth::Two | BitDepth::Four => unpack_indices(buf, *bit_depth, pixel_count)?,
             };
 
             // palette present in info.palette as RGB triples
@@ -213,5 +214,42 @@ fn expand_to_rgba8(color: &ColorType, bit_depth: &BitDepth, buf: &[u8], info: &p
         }
         _ => Err(anyhow!("unsupported color type: {:?}", color).into())
     }
+}
+
+fn unpack_indices(buf: &[u8], bit_depth: BitDepth, pixel_count: usize) -> anyhow::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(pixel_count);
+    match bit_depth {
+        BitDepth::One => {
+            for &b in buf.iter() {
+                for bit in 0..8 {
+                    if out.len() >= pixel_count { break; }
+                    let shift = 7 - bit;
+                    let val = (b >> shift) & 0x01;
+                    out.push(val);
+                }
+            }
+        }
+        BitDepth::Two => {
+            for &b in buf.iter() {
+                for shift in (0..8).step_by(2).rev() { // 6,4,2,0
+                    if out.len() >= pixel_count { break; }
+                    let val = (b >> shift) & 0x03;
+                    out.push(val);
+                }
+            }
+        }
+        BitDepth::Four => {
+            for &b in buf.iter() {
+                for &shift in &[4usize, 0usize] {
+                    if out.len() >= pixel_count { break; }
+                    let val = (b >> shift) & 0x0F;
+                    out.push(val);
+                }
+            }
+        }
+        _ => return Err(anyhow!("unsupported small bit depth").into()),
+    }
+    out.truncate(pixel_count);
+    Ok(out)
 }
 
