@@ -6,7 +6,8 @@ use rusqlite::functions::FunctionFlags;
 use rusqlite::types::{ToSqlOutput, Value};
 use rusqlite::{Connection, Result};
 
-use wimage::{DateHours, PalettedImage, TileHistory};
+use wimage::{PalettedImage};
+use wimage::tilehistory::{DateHours, TileHistory};
 
 #[no_mangle]
 pub unsafe extern "C" fn sqlite3_extension_init(

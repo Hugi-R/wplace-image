@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use chrono::{DateTime, Utc};
-use wimage::{PalettedImage, downscale_mode_weighted, TileHistory, DateHours};
+use wimage::{PalettedImage};
+use wimage::imageprocessing::{downscale_mode_weighted};
+use wimage::tilehistory::{TileHistory, DateHours};
 
 #[derive(Parser)]
 #[command(name = "wimage_cli")]

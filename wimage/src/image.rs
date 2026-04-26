@@ -3,7 +3,7 @@ use std::io::{Read, Write, Cursor, BufRead, Seek};
 use anyhow::anyhow;
 use png::{Decoder, Encoder, ColorType, BitDepth};
 
-use crate::palette::{index_from_rgba, PALETTE};
+use crate::palette;
 
 /// In-memory representation of a paletted image
 pub struct PalettedImage {
@@ -62,23 +62,9 @@ pub fn paletted_to_png<W: Write>(paletted: &PalettedImage, out: W, ignore_diff: 
         encoder.set_compression(png::Compression::Fastest); // Fast or Fastest are good choices
 
         // Build palette (RGB triples) and tRNS (alpha table)
-        let mut palette_bytes = Vec::with_capacity(256 * 3);
-        let mut trns = Vec::with_capacity(256);
-        let palette = if ignore_diff {
-            let mut pal = PALETTE.clone();
-            pal[crate::palette::DIFF_NO_CHANGE as usize] = [0,0,0,0];
-            pal
-        } else {
-            PALETTE.clone()
-        };
-        for rgba in palette.iter() {
-            palette_bytes.push(rgba[0]);
-            palette_bytes.push(rgba[1]);
-            palette_bytes.push(rgba[2]);
-            trns.push(rgba[3]);
-        }
-        encoder.set_palette(palette_bytes);
-        encoder.set_trns(trns.as_slice());
+        let pal = if ignore_diff { &palette::PNG_PALETTE_NO_DIFF } else { &palette::PNG_PALETTE };
+        encoder.set_palette(pal.0.as_slice());
+        encoder.set_trns(pal.1.as_slice());
 
         let mut writer = encoder.write_header()?;
         writer.write_image_data(&paletted.indices)?;
@@ -153,7 +139,7 @@ pub fn png_to_paletted<R: BufRead + Seek>(reader: R) -> anyhow::Result<PalettedI
     for px in rgba.chunks_exact(4) {
         let mut rgba4 = [0u8;4];
         rgba4.copy_from_slice(px);
-        let idx = index_from_rgba(rgba4);
+        let idx = palette::index_from_rgba(rgba4);
         indices.push(idx);
     }
 

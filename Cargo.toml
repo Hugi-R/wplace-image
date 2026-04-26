@@ -3,4 +3,5 @@ resolver = "3"
 members = [
     "wimage",
     "sqlite-ext",
+    "wimage-wasm",
 ]

@@ -113,3 +113,29 @@ pub fn rgba_from_index(i: u8) -> [u8; 4] {
 pub fn index_from_rgba(rgba: [u8; 4]) -> u8 {
     *PALETTE_INV.get(&rgba).unwrap_or(&255u8)
 }
+
+pub static PALETTE_NO_DIFF: Lazy<[[u8; 4]; PALETTE_SIZE]> = Lazy::new(|| {
+    let mut a = PALETTE.clone();
+    a[DIFF_NO_CHANGE as usize] = [0, 0, 0, 0]; // Diff (transparent)
+    a
+});
+
+fn png_palette(ignore_diff: bool) -> (Vec<u8>, Vec<u8>) {
+    let mut palette_bytes = Vec::with_capacity(256 * 3);
+    let mut trns = Vec::with_capacity(256);
+    let pal = if ignore_diff {
+        &PALETTE_NO_DIFF
+    } else {
+        &PALETTE
+    };
+    for rgba in pal.iter() {
+        palette_bytes.push(rgba[0]);
+        palette_bytes.push(rgba[1]);
+        palette_bytes.push(rgba[2]);
+        trns.push(rgba[3]);
+    }
+    (palette_bytes, trns)
+}
+
+pub static PNG_PALETTE: Lazy<(Vec<u8>, Vec<u8>)> = Lazy::new(|| png_palette(false));
+pub static PNG_PALETTE_NO_DIFF: Lazy<(Vec<u8>, Vec<u8>)> = Lazy::new(|| png_palette(true));

@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Context;
-use wimage::{paletted_to_compressed_bytes_level, PalettedImage};
+use wimage::{PalettedImage};
+use wimage::image::{paletted_to_compressed_bytes_level};
 
 const REPEAT: usize = 10;
 

@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Context;
-use wimage::{downscale_mode_weighted, downscale_mode_weighted_2x2, PalettedImage};
+use wimage::{PalettedImage};
+use wimage::imageprocessing::{downscale_mode_weighted, downscale_mode_weighted_2x2};
 
 const REPEAT: usize = 20;
 const BLOCK_SIZES: [usize; 2] = [2, 4];

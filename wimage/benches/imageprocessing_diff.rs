@@ -1,5 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use wimage::{PalettedImage, diff_paletted, apply_diff_paletted};
+use wimage::{PalettedImage};
+use wimage::imageprocessing::{diff_paletted, apply_diff_paletted};
 
 /// Create a 1000x1000 image with all pixels set to the same value
 fn create_uniform_image(size: usize, pixel_value: u8) -> PalettedImage {
