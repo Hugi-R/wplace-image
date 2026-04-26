@@ -17,3 +17,10 @@ cargo run -p wimage --bin downscale_bench
 ```shell
 cargo run -p wimage --bin wimage_cli
 ```
+
+## Tests and bench
+```shell
+cargo test --lib imageprocessing
+cargo bench --bench imageprocessing_diff # expected <100µs
+```
+

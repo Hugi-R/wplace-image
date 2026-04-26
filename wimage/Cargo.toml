@@ -10,3 +10,10 @@ png = "0.18.0"
 zstd = "0.13.3"
 clap = { version = "4.0", features = ["derive"] }
 chrono = "0.4"
+
+[dev-dependencies]
+criterion = { version = "0.5" }
+
+[[bench]]
+name = "imageprocessing_diff"
+harness = false
