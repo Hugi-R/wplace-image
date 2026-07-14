@@ -121,7 +121,7 @@ fn main() -> Result<()> {
                 let date_hours = parse_date(&date)?;
                 let image_compressed = fs::read(&image)?;
                 let paletted = PalettedImage::from_compressed_bytes(&image_compressed)?;
-                history.add(date_hours, paletted)?;
+                history.set(date_hours, paletted)?;
                 let new_serialized = history.to_bytes();
                 fs::write(&input, new_serialized)?;
             }
