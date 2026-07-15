@@ -168,6 +168,12 @@ impl TileHistory {
                     }
                 }
             }
+            if prev_date_hours.is_none() {
+                // insert without diff (this could happen if we're inserting a version that is earlier than the first version we have, or if we're overwriting the first version)
+                let compressed = paletted.to_compressed_bytes()?;
+                self.imgs.insert(date_hours, compressed);
+                return Ok(());
+            }
             let prev_date_hours = prev_date_hours.ok_or(anyhow::anyhow!("No previous version found for diff"))?;
             let prev_img = self.imgs.get(&prev_date_hours).ok_or(anyhow::anyhow!("Previous version not found"))?;
             let prev_paletted = prev_img.to_paletted()?;
@@ -383,7 +389,60 @@ mod tests {
         assert_eq!(th.imgs.len(), 3);
     }
 
-    // -- get tests --
+    #[test]
+    fn set_before_all_existing_stores_full() {
+        // History has only DateHours(5). Inserting DateHours(3) has no
+        // previous version to diff against, so it must store as a full image.
+        let mut th = TileHistory { imgs: HashMap::new() };
+        th.set(DateHours(5), make_paletted(2, 2, 42)).unwrap();
+        th.set(DateHours(3), make_paletted(2, 2, 99)).unwrap();
+        assert_eq!(th.imgs.len(), 2);
+
+        // Getting version 3 should return the full image we inserted.
+        let result = th.get(DateHours(3)).unwrap();
+        assert!(result.indices.iter().all(|&v| v == 99));
+    }
+
+    #[test]
+    fn set_between_versions_diffs_against_previous() {
+        // History has 0 and 5. Inserting 3 should diff against 0.
+        let mut th = TileHistory { imgs: HashMap::new() };
+        th.set(DateHours(0), make_paletted(2, 2, 42)).unwrap();
+        th.set(DateHours(5), make_paletted(2, 2, 100)).unwrap();
+
+        // Insert a version between 0 and 5
+        th.set(DateHours(3), make_paletted(2, 2, 77)).unwrap();
+        assert_eq!(th.imgs.len(), 3);
+
+        // Getting version 3 should return the correct image.
+        let result = th.get(DateHours(3)).unwrap();
+        assert!(result.indices.iter().all(|&v| v == 77));
+    }
+
+    #[test]
+    fn set_overwrites_existing_version() {
+        let mut th = TileHistory { imgs: HashMap::new() };
+        th.set(DateHours(0), make_paletted(2, 2, 42)).unwrap();
+        th.set(DateHours(1), make_paletted(2, 2, 100)).unwrap();
+
+        // Overwrite version 1 with a different image
+        th.set(DateHours(1), make_paletted(2, 2, 200)).unwrap();
+        assert_eq!(th.imgs.len(), 2);
+
+        let result = th.get(DateHours(1)).unwrap();
+        assert!(result.indices.iter().all(|&v| v == 200));
+    }
+
+    #[test]
+    fn get_with_non_zero_first_entry() {
+        // First entry is at DateHours(5), not 0.
+        let mut th = TileHistory { imgs: HashMap::new() };
+        let img = make_paletted_with_changes(2, 2, 42, &[(0, 10)]);
+        th.set(DateHours(5), img.clone()).unwrap();
+
+        let result = th.get(DateHours(5)).unwrap();
+        assert_eq!(result.indices, img.indices);
+    }
 
     #[test]
     fn get_empty_history_fails() {
