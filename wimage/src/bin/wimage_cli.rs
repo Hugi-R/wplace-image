@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::Cursor;
 use std::collections::HashMap;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use chrono::{DateTime, Utc};
 use wimage::{PalettedImage};
@@ -116,25 +116,25 @@ fn main() -> Result<()> {
                 fs::write(&output, serialized)?;
             }
             HistoryCommands::Add { input, date, image } => {
-                let history_bytes = fs::read(&input)?;
+                let history_bytes = fs::read(&input).with_context(|| format!("Failed to read history file: {}", input))?;
                 let mut history = TileHistory::from_bytes(&history_bytes)?;
-                let date_hours = parse_date(&date)?;
-                let image_compressed = fs::read(&image)?;
+                let date_hours = parse_date(&date).with_context(|| format!("Failed to parse date: {}", date))?;
+                let image_compressed = fs::read(&image).with_context(|| format!("Failed to read image file: {}", image))?;
                 let paletted = PalettedImage::from_compressed_bytes(&image_compressed)?;
                 history.set(date_hours, paletted)?;
                 let new_serialized = history.to_bytes();
                 fs::write(&input, new_serialized)?;
             }
             HistoryCommands::Get { input, date, output } => {
-                let history_bytes = fs::read(&input)?;
+                let history_bytes = fs::read(&input).with_context(|| format!("Failed to read history file: {}", input))?;
                 let history = TileHistory::from_bytes(&history_bytes)?;
-                let date_hours = parse_date(&date)?;
+                let date_hours = parse_date(&date).with_context(|| format!("Failed to parse date: {}", date))?;
                 let paletted = history.get(date_hours)?;
                 let compressed = paletted.to_compressed_bytes()?;
                 fs::write(&output, &compressed.0)?;
             }
             HistoryCommands::List { input } => {
-                let history_bytes = fs::read(&input)?;
+                let history_bytes = fs::read(&input).with_context(|| format!("Failed to read history file: {}", input))?;
                 let history = TileHistory::from_bytes(&history_bytes)?;
                 let dates = history.list();
                 for date in dates {

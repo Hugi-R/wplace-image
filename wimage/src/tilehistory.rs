@@ -218,6 +218,32 @@ impl TileHistory {
         }
         Ok(base_paletted)
     }
+
+    /// Checks that the first image is a full image.
+    /// Returns true if the history is valid, false otherwise, and mutates the history to fix it.
+    pub fn validate_and_fix(&mut self) -> anyhow::Result<bool> {
+        if self.imgs.is_empty() {
+            return Ok(true);
+        }
+
+        // hasmap are not ordered, so we need to sort the keys
+        let mut keys = self.imgs.keys().cloned().collect::<Vec<DateHours>>();
+        keys.sort();
+
+        // Check that the first image is a full image
+        let first_key = keys[0];
+        let paletted = self.imgs.get(&first_key).unwrap().to_paletted()?;
+        let full_image = paletted.indices.iter().all(|&v| v != palette::DIFF_NO_CHANGE);
+        if !full_image {
+            // First image is not a full image, we need to fix it by creating a new TileHistory with a full image at the first key and diffs for the rest of the keys.
+            let fixed = paletted.indices.iter().map(|&v| if v == palette::DIFF_NO_CHANGE { palette::TRANSPARENT } else { v }).collect::<Vec<u8>>();
+            let paletted_fixed = PalettedImage { width: paletted.width, height: paletted.height, indices: fixed };
+            self.imgs.insert(first_key, paletted_fixed.to_compressed_bytes()?);
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
 }
 
 pub fn init_img_from_tile_coords(x1: i64, y1: i64, x2: i64, y2: i64, background: u8) -> PalettedImage {
