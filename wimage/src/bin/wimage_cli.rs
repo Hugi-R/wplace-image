@@ -69,6 +69,9 @@ enum HistoryCommands {
     List {
         input: String,
     },
+    Debug {
+        input: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -139,6 +142,19 @@ fn main() -> Result<()> {
                 let dates = history.list();
                 for date in dates {
                     println!("{} - {}", date.0, date.to_datetime());
+                }
+            }
+            HistoryCommands::Debug { input } => {
+                let history_bytes = fs::read(&input).with_context(|| format!("Failed to read history file: {}", input))?;
+                let history = TileHistory::from_bytes(&history_bytes)?;
+                let dates = history.list();
+                for date in dates {
+                    let blob = history.imgs.get(&date).ok_or(anyhow!("No data at date {}", date.0))?;
+                    println!("{} - {}, size: {}", date.0, date.to_datetime(), blob.0.len());
+                    let name = format!("{}_{}.png", input, date.0);
+                    let paletted = PalettedImage::from_compressed_bytes(&blob.0)?;
+                    let png_bytes = paletted.to_png_diff()?;
+                    fs::write(&name, png_bytes)?;
                 }
             }
         },
