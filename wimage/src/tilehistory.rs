@@ -220,6 +220,7 @@ impl TileHistory {
     }
 
     /// Checks that the first image is a full image.
+    /// And that no diff image is fully unchanged (all pixels are DIFF_NO_CHANGE).
     /// Returns true if the history is valid, false otherwise, and mutates the history to fix it.
     pub fn validate_and_fix(&mut self) -> anyhow::Result<bool> {
         if self.imgs.is_empty() {
@@ -230,6 +231,8 @@ impl TileHistory {
         let mut keys = self.imgs.keys().cloned().collect::<Vec<DateHours>>();
         keys.sort();
 
+        let mut no_changes = true;
+
         // Check that the first image is a full image
         let first_key = keys[0];
         let paletted = self.imgs.get(&first_key).unwrap().to_paletted()?;
@@ -239,10 +242,21 @@ impl TileHistory {
             let fixed = paletted.indices.iter().map(|&v| if v == palette::DIFF_NO_CHANGE { palette::TRANSPARENT } else { v }).collect::<Vec<u8>>();
             let paletted_fixed = PalettedImage { width: paletted.width, height: paletted.height, indices: fixed };
             self.imgs.insert(first_key, paletted_fixed.to_compressed_bytes()?);
-            return Ok(false);
+            no_changes = false;
         }
 
-        Ok(true)
+        // Check all other diffs to not be fully unchanged
+        for key in keys.iter().skip(1) {
+            let paletted = self.imgs.get(key).unwrap().to_paletted()?;
+            let all_unchanged = paletted.indices.iter().all(|&v| v == palette::DIFF_NO_CHANGE);
+            if all_unchanged {
+                // This diff is fully unchanged, we can remove it from the history.
+                self.imgs.remove(key);
+                no_changes = false;
+            }
+        }
+
+        Ok(no_changes)
     }
 }
 
