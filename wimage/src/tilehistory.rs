@@ -228,16 +228,18 @@ impl TileHistory {
             return Ok(true);
         }
 
+        let mut no_changes = true;
+
+        // Apply filter if provided
+        let keys_count = self.imgs.len();
+        if let Some(filter) = filter_datehours {
+            self.imgs.retain(|k, _| filter.contains(k) || *k == DateHours(0));
+            no_changes = self.imgs.len() == keys_count;
+        }
+
         // hasmap are not ordered, so we need to sort the keys
         let mut keys = self.imgs.keys().cloned().collect::<Vec<DateHours>>();
         keys.sort();
-
-        // Apply filter if provided
-        if let Some(filter) = filter_datehours {
-            self.imgs.retain(|k, _| filter.contains(k) || *k == DateHours(0));
-        }
-
-        let mut no_changes = true;
 
         // Check that the first image is a full image
         let first_key = keys[0];
