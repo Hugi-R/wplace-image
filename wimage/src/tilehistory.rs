@@ -234,6 +234,9 @@ impl TileHistory {
             self.imgs.retain(|k, _| filter.contains(k) || *k == DateHours(0));
             no_changes = self.imgs.len() == keys_count;
         }
+        if self.imgs.is_empty() {
+            return Ok(true);
+        }
 
         // hasmap are not ordered, so we need to sort the keys
         let mut keys = self.imgs.keys().cloned().collect::<Vec<DateHours>>();
