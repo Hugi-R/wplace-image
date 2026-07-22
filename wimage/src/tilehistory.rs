@@ -219,8 +219,9 @@ impl TileHistory {
     /// Checks that the first image is a full image.
     /// And that no diff image is fully unchanged (all pixels are DIFF_NO_CHANGE).
     /// If filter_datehours is provided, keep only the images that are in the filter_datehours list, and remove all other images from the history (DateHours 0 is always kept if it exists).
+    /// If rebuild is true, rebuild the history from scratch (get all images in order, then set them in order).
     /// Returns true if the history is valid, false otherwise, and mutates the history to fix it.
-    pub fn validate_and_fix(&mut self, filter_datehours: Option<Vec<DateHours>>) -> anyhow::Result<bool> {
+    pub fn validate_and_fix(&mut self, filter_datehours: Option<Vec<DateHours>>, rebuild: bool) -> anyhow::Result<bool> {
         if self.imgs.is_empty() {
             return Ok(true);
         }
@@ -259,6 +260,20 @@ impl TileHistory {
                 self.imgs.remove(key);
                 no_changes = false;
             }
+        }
+
+        // Rebuild
+        // This is only usefull if, for some reason, a full image/incorrect diff was manually added to the history
+        if rebuild {
+            let mut new_history = TileHistory { imgs: HashMap::new() };
+            let mut keys = self.imgs.keys().cloned().collect::<Vec<DateHours>>();
+            keys.sort();
+            for key in keys {
+                let paletted = self.get(key)?;
+                new_history.set(key, paletted)?;
+            }
+            *self = new_history;
+            no_changes = false;
         }
 
         Ok(no_changes)
