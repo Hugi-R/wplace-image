@@ -3,7 +3,6 @@ use std::io::Cursor;
 use std::collections::HashMap;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use chrono::{DateTime, Utc};
 use wimage::{PalettedImage};
 use wimage::imageprocessing::{downscale_mode_weighted};
 use wimage::tilehistory::{TileHistory, DateHours};
@@ -55,14 +54,14 @@ enum HistoryCommands {
     Add {
         input: String,
         #[arg(short, long)]
-        date: String,
+        date: u32,
         #[arg(short, long)]
         image: String,
     },
     Get {
         input: String,
         #[arg(short, long)]
-        date: String,
+        date: u32,
         #[arg(short, long)]
         output: String,
     },
@@ -121,7 +120,7 @@ fn main() -> Result<()> {
             HistoryCommands::Add { input, date, image } => {
                 let history_bytes = fs::read(&input).with_context(|| format!("Failed to read history file: {}", input))?;
                 let mut history = TileHistory::from_bytes(&history_bytes)?;
-                let date_hours = parse_date(&date).with_context(|| format!("Failed to parse date: {}", date))?;
+                let date_hours = DateHours(date);
                 let image_compressed = fs::read(&image).with_context(|| format!("Failed to read image file: {}", image))?;
                 let paletted = PalettedImage::from_compressed_bytes(&image_compressed)?;
                 history.set(date_hours, paletted)?;
@@ -131,10 +130,10 @@ fn main() -> Result<()> {
             HistoryCommands::Get { input, date, output } => {
                 let history_bytes = fs::read(&input).with_context(|| format!("Failed to read history file: {}", input))?;
                 let history = TileHistory::from_bytes(&history_bytes)?;
-                let date_hours = parse_date(&date).with_context(|| format!("Failed to parse date: {}", date))?;
+                let date_hours = DateHours(date);
                 let paletted = history.get(date_hours)?;
-                let compressed = paletted.to_compressed_bytes()?;
-                fs::write(&output, &compressed.0)?;
+                let png = paletted.to_png()?;
+                fs::write(&output, &png)?;
             }
             HistoryCommands::List { input } => {
                 let history_bytes = fs::read(&input).with_context(|| format!("Failed to read history file: {}", input))?;
@@ -184,10 +183,4 @@ fn parse_weights(weights: &str) -> Result<[u32; 256]> {
             Ok(arr)
         }
     }
-}
-
-fn parse_date(date_str: &str) -> Result<DateHours> {
-    let dt = DateTime::parse_from_rfc3339(date_str)?.with_timezone(&Utc);
-    let hours = DateHours::from_datetime(dt);
-    Ok(hours)
 }

@@ -152,35 +152,32 @@ impl TileHistory {
         out
     }
 
-    pub fn set(&mut self, date_hours: DateHours, paletted: crate::PalettedImage) -> anyhow::Result<()> {
+    /// Add the palleted image to the history at the given date_hours.
+    /// The datehour must be equal or after the last datehour in the history due to the diff logic, otherwise it will return an error.
+    /// If there are previous versions, it will calculate the diff and store it.
+    /// Returns true if the image was added. False if the image was identical to the previous version and was not added.
+    pub fn set(&mut self, date_hours: DateHours, paletted: crate::PalettedImage) -> anyhow::Result<bool> {
+        // Check last date_hours in history
+        if let Some(last_date) = self.imgs.keys().max() {
+            if date_hours < *last_date {
+                return Err(anyhow::anyhow!("Cannot add image for date_hours {} because it is before the last date_hours {} in the history", date_hours.0, last_date.0));
+            }
+        }
+
         if (date_hours.0 == 0) || self.imgs.is_empty() {
             // first version, store as full image
             let compressed = paletted.to_compressed_bytes()?;
             self.imgs.insert(date_hours, compressed);
-            Ok(())
+            Ok(true)
         } else {
             // calculate diff with previous version
-            let mut prev_date_hours = None;
-            for key in self.imgs.keys() {
-                if *key < date_hours {
-                    if prev_date_hours.is_none() || *key > prev_date_hours.unwrap() {
-                        prev_date_hours = Some(*key);
-                    }
-                }
-            }
-            if prev_date_hours.is_none() {
-                // insert without diff (this could happen if we're inserting a version that is earlier than the first version we have, or if we're overwriting the first version)
-                let compressed = paletted.to_compressed_bytes()?;
+            let prev_paletted = self.get(DateHours(date_hours.0.saturating_sub(1)))?; // Should never be an issue since we check for 0 in the if above, but just in case, we use saturating_sub to avoid underflow.
+            let (any_diff, diff_paletted) = imageprocessing::diff_paletted(&prev_paletted, &paletted);
+            if any_diff {
+                let compressed = diff_paletted.to_compressed_bytes()?;
                 self.imgs.insert(date_hours, compressed);
-                return Ok(());
             }
-            let prev_date_hours = prev_date_hours.ok_or(anyhow::anyhow!("No previous version found for diff"))?;
-            let prev_img = self.imgs.get(&prev_date_hours).ok_or(anyhow::anyhow!("Previous version not found"))?;
-            let prev_paletted = prev_img.to_paletted()?;
-            let (_, diff_paletted) = imageprocessing::diff_paletted(&prev_paletted, &paletted);
-            let compressed = diff_paletted.to_compressed_bytes()?;
-            self.imgs.insert(date_hours, compressed);
-            Ok(())
+            Ok(any_diff)
         }
     }
 
@@ -438,33 +435,25 @@ mod tests {
     }
 
     #[test]
-    fn set_before_all_existing_stores_full() {
+    fn set_before_all_existing_errors() {
         // History has only DateHours(5). Inserting DateHours(3) has no
         // previous version to diff against, so it must store as a full image.
         let mut th = TileHistory { imgs: HashMap::new() };
         th.set(DateHours(5), make_paletted(2, 2, 42)).unwrap();
-        th.set(DateHours(3), make_paletted(2, 2, 99)).unwrap();
-        assert_eq!(th.imgs.len(), 2);
-
-        // Getting version 3 should return the full image we inserted.
-        let result = th.get(DateHours(3)).unwrap();
-        assert!(result.indices.iter().all(|&v| v == 99));
+        assert!(th.set(DateHours(3), make_paletted(2, 2, 99)).is_err());
+        assert_eq!(th.imgs.len(), 1);
     }
 
     #[test]
-    fn set_between_versions_diffs_against_previous() {
+    fn set_between_versions_diffs_errors() {
         // History has 0 and 5. Inserting 3 should diff against 0.
         let mut th = TileHistory { imgs: HashMap::new() };
         th.set(DateHours(0), make_paletted(2, 2, 42)).unwrap();
         th.set(DateHours(5), make_paletted(2, 2, 100)).unwrap();
 
         // Insert a version between 0 and 5
-        th.set(DateHours(3), make_paletted(2, 2, 77)).unwrap();
-        assert_eq!(th.imgs.len(), 3);
-
-        // Getting version 3 should return the correct image.
-        let result = th.get(DateHours(3)).unwrap();
-        assert!(result.indices.iter().all(|&v| v == 77));
+        assert!(th.set(DateHours(3), make_paletted(2, 2, 77)).is_err());
+        assert_eq!(th.imgs.len(), 2);
     }
 
     #[test]

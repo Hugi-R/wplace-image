@@ -29,6 +29,7 @@ impl PalettedImage {
 /// pixels that differ are taken from `new`.
 /// This allows to store only the differences between two images.
 /// ZSTD can achieve significant compression if the images are similar. (Lots of DIFF_COLOR)
+/// Returns True if there are differences, and the diff image.
 pub fn diff_paletted(base: &PalettedImage, new: &PalettedImage) -> (bool, PalettedImage) {
     assert!(base.width == new.width && base.height == new.height);
 
