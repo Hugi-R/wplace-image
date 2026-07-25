@@ -131,7 +131,7 @@ fn main() -> Result<()> {
                 let history_bytes = fs::read(&input).with_context(|| format!("Failed to read history file: {}", input))?;
                 let history = TileHistory::from_bytes(&history_bytes)?;
                 let date_hours = DateHours(date);
-                let paletted = history.get(date_hours)?;
+                let paletted = history.get(date_hours)?.ok_or(anyhow!("No image found for date {}", date))?;
                 let png = paletted.to_png()?;
                 fs::write(&output, &png)?;
             }

@@ -164,14 +164,17 @@ impl TileHistory {
             }
         }
 
-        if (date_hours.0 == 0) || self.imgs.is_empty() {
+        // calculate diff with previous version
+        let prev_paletted = self.get(DateHours(date_hours.0.saturating_sub(1)))?;
+
+
+        if !prev_paletted.is_some() {
             // first version, store as full image
             let compressed = paletted.to_compressed_bytes()?;
             self.imgs.insert(date_hours, compressed);
             Ok(true)
         } else {
-            // calculate diff with previous version
-            let prev_paletted = self.get(DateHours(date_hours.0.saturating_sub(1)))?; // Should never be an issue since we check for 0 in the if above, but just in case, we use saturating_sub to avoid underflow.
+            let prev_paletted = prev_paletted.unwrap();
             let (any_diff, diff_paletted) = imageprocessing::diff_paletted(&prev_paletted, &paletted);
             if any_diff {
                 let compressed = diff_paletted.to_compressed_bytes()?;
@@ -187,10 +190,14 @@ impl TileHistory {
         out
     }
 
+    pub fn has(&self, date_hours: DateHours) -> bool {
+        self.imgs.contains_key(&date_hours)
+    }
+
     /// Get the tile image for a specific timestamp by applying all diffs up to that timestamp on top of an empty tile.
-    pub fn get(&self, until: DateHours) -> anyhow::Result<PalettedImage> {
+    pub fn get(&self, until: DateHours) -> anyhow::Result<Option<PalettedImage>> {
         if self.imgs.is_empty() {
-            return Err(anyhow::anyhow!(ERR_TILE_HISTORY_NO_IMAGES));
+            return Ok(None);
         }
 
         // hasmap are not ordered, so we need to sort the keys
@@ -199,7 +206,7 @@ impl TileHistory {
         // Keep keys that are <= until
         keys = keys.into_iter().filter(|k| *k <= until).collect::<Vec<DateHours>>();
         if keys.len() == 0 {
-            return Err(anyhow::anyhow!(ERR_NO_IMAGES_FOR_VERSION));
+            return Ok(None);
         }
 
         // Load base image
@@ -213,7 +220,7 @@ impl TileHistory {
 
             base_paletted = imageprocessing::apply_diff_paletted(&base_paletted, &version_paletted);
         }
-        Ok(base_paletted)
+        Ok(Some(base_paletted))
     }
 
     /// Checks that the first image is a full image.
@@ -272,7 +279,7 @@ impl TileHistory {
             let mut keys = self.imgs.keys().cloned().collect::<Vec<DateHours>>();
             keys.sort();
             for key in keys {
-                let paletted = self.get(key)?;
+                let paletted = self.get(key)?.unwrap();
                 new_history.set(key, paletted)?;
             }
             *self = new_history;
@@ -484,7 +491,7 @@ mod tests {
         th.set(DateHours(1), make_paletted(2, 2, 200)).unwrap();
         assert_eq!(th.imgs.len(), 2);
 
-        let result = th.get(DateHours(1)).unwrap();
+        let result = th.get(DateHours(1)).unwrap().unwrap();
         assert!(result.indices.iter().all(|&v| v == 200));
     }
 
@@ -495,15 +502,16 @@ mod tests {
         let img = make_paletted_with_changes(2, 2, 42, &[(0, 10)]);
         th.set(DateHours(5), img.clone()).unwrap();
 
-        let result = th.get(DateHours(5)).unwrap();
+        let result = th.get(DateHours(5)).unwrap().unwrap();
         assert_eq!(result.indices, img.indices);
     }
 
     #[test]
-    fn get_empty_history_fails() {
+    fn get_empty_history_none() {
         let th = TileHistory { imgs: HashMap::new() };
         let result = th.get(DateHours(0));
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 
     #[test]
@@ -511,7 +519,7 @@ mod tests {
         let mut th = TileHistory { imgs: HashMap::new() };
         th.set(DateHours(0), make_paletted(2, 2, 42)).unwrap();
 
-        let result = th.get(DateHours(0)).unwrap();
+        let result = th.get(DateHours(0)).unwrap().unwrap();
         assert_eq!(result.width, 2);
         assert_eq!(result.height, 2);
         assert!(result.indices.iter().all(|&v| v == 42));
@@ -529,7 +537,7 @@ mod tests {
         th.set(DateHours(1), diff).unwrap();
 
         // Get version at DateHours(1) should return the reconstructed image
-        let result = th.get(DateHours(1)).unwrap();
+        let result = th.get(DateHours(1)).unwrap().unwrap();
         assert!(result.indices.iter().all(|&v| v == 100));
     }
 
@@ -547,7 +555,7 @@ mod tests {
         diff.indices[15] = 30;
         th.set(DateHours(1), diff).unwrap();
 
-        let result = th.get(DateHours(1)).unwrap();
+        let result = th.get(DateHours(1)).unwrap().unwrap();
         assert_eq!(result.indices[0], 10);
         assert_eq!(result.indices[5], 20);
         assert_eq!(result.indices[15], 30);
@@ -562,14 +570,15 @@ mod tests {
     #[test]
     fn get_no_images_for_version() {
         // Build a TileHistory that only has a version at DateHours(10),
-        // so requesting DateHours(5) finds no keys <= 5 and returns an error.
+        // so requesting DateHours(5) finds no keys <= 5 and returns none.
         let base = make_paletted(2, 2, 42);
         let compressed = base.to_compressed_bytes().unwrap();
         let th = TileHistory {
             imgs: [(DateHours(10), compressed)].into_iter().collect(),
         };
         let result = th.get(DateHours(5));
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 
     #[test]
@@ -583,11 +592,11 @@ mod tests {
         th.set(DateHours(1), expected_v1.clone()).unwrap();
 
         // Get version 0
-        let result_v0 = th.get(DateHours(0)).unwrap();
+        let result_v0 = th.get(DateHours(0)).unwrap().unwrap();
         assert_eq!(result_v0.indices, expected_base.indices);
 
         // Get version 1
-        let result_v1 = th.get(DateHours(1)).unwrap();
+        let result_v1 = th.get(DateHours(1)).unwrap().unwrap();
         assert_eq!(result_v1.indices, expected_v1.indices);
     }
 
@@ -598,7 +607,7 @@ mod tests {
         th.set(DateHours(1), make_paletted(2, 2, 100)).unwrap();
 
         // Get base version even though later versions exist
-        let result = th.get(DateHours(0)).unwrap();
+        let result = th.get(DateHours(0)).unwrap().unwrap();
         assert!(result.indices.iter().all(|&v| v == 42));
     }
 
@@ -613,12 +622,12 @@ mod tests {
         let bytes = th.to_bytes();
         let restored = TileHistory::from_bytes(&bytes).unwrap();
 
-        let orig_get0 = th.get(DateHours(0)).unwrap();
-        let restored_get0 = restored.get(DateHours(0)).unwrap();
+        let orig_get0 = th.get(DateHours(0)).unwrap().unwrap();
+        let restored_get0 = restored.get(DateHours(0)).unwrap().unwrap();
         assert_eq!(restored_get0.indices, orig_get0.indices);
 
-        let orig_get1 = th.get(DateHours(1)).unwrap();
-        let restored_get1 = restored.get(DateHours(1)).unwrap();
+        let orig_get1 = th.get(DateHours(1)).unwrap().unwrap();
+        let restored_get1 = restored.get(DateHours(1)).unwrap().unwrap();
         assert_eq!(restored_get1.indices, orig_get1.indices);
     }
 }

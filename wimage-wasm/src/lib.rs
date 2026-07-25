@@ -83,13 +83,10 @@ pub async fn wasm_screenshot(base_url: &str, version: u32, x1: i64, y1: i64, x2:
                         let tiles = TileHistory::from_bytes(&data)
                             .map_err(|e| wasm_bindgen::JsValue::from_str(&format!("Failed to decode tile history: {}", e)))?;
                         match tiles.get(version) {
-                            Ok(img) => img,
+                            Ok(Some(img)) => img,
+                            Ok(None) => PalettedImage { width: 1000, height: 1000, indices: vec![0u8; 1000*1000] },
                             Err(e) => {
-                                if e.to_string() == tilehistory::ERR_NO_IMAGES_FOR_VERSION || e.to_string() == tilehistory::ERR_TILE_HISTORY_NO_IMAGES {
-                                    PalettedImage { width: 1000, height: 1000, indices: vec![0u8; 1000*1000] }
-                                } else {
-                                    return Err(wasm_bindgen::JsValue::from_str(&format!("Failed to reconstruct image: {}", e)));
-                                }
+                                return Err(wasm_bindgen::JsValue::from_str(&format!("Failed to reconstruct image: {}", e)));
                             }
                         }
                     }
@@ -173,5 +170,6 @@ pub fn get_image(version: u32, data: &[u8]) -> Result<Vec<u8>, wasm_bindgen::JsV
 
     let base_paletted = tiles.get(version)
         .map_err(|e| wasm_bindgen::JsValue::from_str(&format!("Failed to reconstruct image: {}", e)))?;
+    let base_paletted = base_paletted.ok_or(wasm_bindgen::JsValue::from_str(&format!("No image found for version {}", version.0)))?;
     base_paletted.to_png().map_err(|e| wasm_bindgen::JsValue::from_str(&format!("Failed to encode png: {}", e)))
 }
