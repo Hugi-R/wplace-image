@@ -970,7 +970,6 @@ dependencies = [
  "chrono",
  "clap",
  "criterion",
- "once_cell",
  "png",
  "zstd",
 ]
