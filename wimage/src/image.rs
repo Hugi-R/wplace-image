@@ -181,20 +181,24 @@ fn expand_to_rgba8(color: &ColorType, bit_depth: &BitDepth, buf: &[u8], info: &p
             // palette present in info.palette as RGB triples
             let palette = info.palette.as_ref().ok_or(anyhow!("indexed PNG without palette"))?;
             let trns = info.trns.as_ref();
-            let mut out = Vec::with_capacity(pixel_count * 4);
-            for &idx in indices.iter() {
-                let i = idx as usize;
+
+            // Build a 256-entry RGBA lookup table once (indices are always u8, so this
+            // covers every possible value) instead of re-deriving color+alpha per pixel.
+            let mut lut = [[255u8, 0, 255, 255]; 256]; // default = debug magenta, opaque
+            for i in 0..256usize {
                 let base = i * 3;
-                if base + 2 >= palette.len() {
-                    // default to magenta/debug
-                    out.push(255); out.push(0); out.push(255);
-                } else {
-                    out.push(palette[base]);
-                    out.push(palette[base + 1]);
-                    out.push(palette[base + 2]);
+                if base + 2 < palette.len() {
+                    lut[i][0] = palette[base];
+                    lut[i][1] = palette[base + 1];
+                    lut[i][2] = palette[base + 2];
                 }
-                let a = trns.and_then(|t| t.get(i)).cloned().unwrap_or(255);
-                out.push(a);
+                lut[i][3] = trns.and_then(|t| t.get(i)).copied().unwrap_or(255);
+            }
+
+            // Fill the output buffer directly instead of pushing one byte at a time.
+            let mut out = vec![0u8; pixel_count * 4];
+            for (px, &idx) in out.chunks_exact_mut(4).zip(indices.iter()) {
+                px.copy_from_slice(&lut[idx as usize]);
             }
             Ok(out)
         }
