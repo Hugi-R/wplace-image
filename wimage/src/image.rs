@@ -95,19 +95,20 @@ pub fn paletted_to_compressed_bytes_level(paletted: &PalettedImage, level: i32) 
 /// `paletted_to_compressed_bytes`) and convert it to a paletted image representation.
 pub fn compressed_bytes_to_paletted(compressed: &[u8]) -> anyhow::Result<PalettedImage> {
     let mut dec = zstd::Decoder::new(Cursor::new(compressed))?;
-    let mut decompressed = Vec::new();
-    dec.read_to_end(&mut decompressed)?;
 
-    if decompressed.len() < 8 {
-        return Err(anyhow!("decompressed data too short"));
-    }
-    let width = u32::from_le_bytes([decompressed[0], decompressed[1], decompressed[2], decompressed[3]]);
-    let height = u32::from_le_bytes([decompressed[4], decompressed[5], decompressed[6], decompressed[7]]);
+    let mut header = [0u8; 8];
+    dec.read_exact(&mut header)
+        .map_err(|e| anyhow!("failed to read image header: {}", e))?;
+    let width = u32::from_le_bytes(header[0..4].try_into().unwrap());
+    let height = u32::from_le_bytes(header[4..8].try_into().unwrap());
     let expected = (width as usize) * (height as usize);
-    if decompressed.len() != 8 + expected {
-        return Err(anyhow!("decompressed length mismatch: expected {} bytes of indices, got {}", expected, decompressed.len() - 8));
-    }
-    let indices = decompressed[8..].to_vec();
+
+    let mut indices: Vec<u8> = Vec::with_capacity(expected);
+    // SAFETY: ok because we just allocated enough space for the indices, and we will fill it completely with read_exact.
+    // We do this to avoid the overhead of initializing the vector with zeros, which is unnecessary since we will overwrite all of it.
+    unsafe { indices.set_len(expected); }
+    dec.read_exact(&mut indices)
+        .map_err(|e| anyhow!("decompressed length mismatch: expected {} bytes of indices ({})", expected, e))?;
 
     Ok(PalettedImage {
         width: width as usize,
