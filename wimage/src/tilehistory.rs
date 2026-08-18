@@ -481,6 +481,39 @@ fn build_apng_frame(
     }
 }
 
+/// Rewrite the `acTL` chunk's `num_frames` field to the given count and fix its CRC.
+/// The animated frame count is only known after generation (empty frames are
+/// skipped), but the PNG encoder requires it up front, so a placeholder is patched
+/// here after `writer.finish()`.
+fn patch_apng_frame_count(out: &mut [u8], count: u32) -> anyhow::Result<()> {
+    let mut offset = 8; // PNG signature
+    while offset < out.len() {
+        if offset + 4 > out.len() {
+            anyhow::bail!("truncated PNG chunk header at offset {offset}");
+        }
+        let length = u32::from_be_bytes(out[offset..offset + 4].try_into().unwrap()) as usize;
+        let type_start = offset + 4;
+        let data_start = offset + 8;
+        let data_end = data_start + length;
+        let crc_end = data_end + 4;
+        if crc_end > out.len() {
+            anyhow::bail!("truncated PNG chunk at offset {offset}");
+        }
+        if &out[type_start..data_start] == b"acTL" {
+            if length < 8 {
+                anyhow::bail!("malformed acTL chunk");
+            }
+            out[data_start..data_start + 4].copy_from_slice(&count.to_be_bytes());
+            let mut crc = crc32_update(0, &out[type_start..data_start]);
+            crc = crc32_update(crc, &out[data_start..data_end]);
+            out[data_end..crc_end].copy_from_slice(&crc.to_be_bytes());
+            return Ok(());
+        }
+        offset = crc_end;
+    }
+    anyhow::bail!("acTL chunk not found")
+}
+
 /// Streaming CRC-32 (IEEE, reflected polynomial 0xEDB88320), as required by the
 /// PNG spec for chunk CRCs. Chain calls by feeding the previous result back in,
 /// starting with 0. Used to fix the acTL CRC after patching its frame count.
@@ -649,6 +682,75 @@ mod tests {
         build_apng_frame(&history, &mut current, DateHours(0), 0, 0, 0, 0, 0);
         assert!(build_apng_frame(&history, &mut current, DateHours(99), 1, 0, 0, 0, 0).is_none());
         assert_eq!(current.indices, vec![10; 1_000_000]);
+    }
+
+    // -- patch_apng_frame_count tests --
+
+    fn png_chunk(chunk_type: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut out = (data.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(chunk_type);
+        out.extend_from_slice(data);
+        let mut crc = crc32_update(0, chunk_type);
+        crc = crc32_update(crc, data);
+        out.extend_from_slice(&crc.to_be_bytes());
+        out
+    }
+
+    fn ihdr_data(width: u32, height: u32) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&width.to_be_bytes());
+        d.extend_from_slice(&height.to_be_bytes());
+        d.extend_from_slice(&[8, 3, 0, 0, 0]); // bit depth 8, indexed color, no interlace
+        d
+    }
+
+    #[test]
+    fn patch_updates_actl_count_and_crc() {
+        let mut apng = b"\x89PNG\r\n\x1a\n".to_vec();
+        apng.extend_from_slice(&png_chunk(b"IHDR", &ihdr_data(2, 2)));
+        let actl_data: Vec<u8> = 1u32.to_be_bytes().into_iter()
+            .chain(0u32.to_be_bytes())
+            .collect();
+        apng.extend_from_slice(&png_chunk(b"acTL", &actl_data)); // placeholder count 1
+        apng.extend_from_slice(&png_chunk(b"IEND", &[]));
+
+        patch_apng_frame_count(&mut apng, 3).unwrap();
+
+        // Walk the chunks and verify the acTL count and CRC.
+        let mut offset = 8;
+        let mut seen_actl = false;
+        while offset < apng.len() {
+            let length = u32::from_be_bytes(apng[offset..offset + 4].try_into().unwrap()) as usize;
+            let ty = &apng[offset + 4..offset + 8];
+            if ty == b"acTL" {
+                seen_actl = true;
+                let nf = u32::from_be_bytes(apng[offset + 8..offset + 12].try_into().unwrap());
+                assert_eq!(nf, 3);
+                let mut crc = crc32_update(0, ty);
+                crc = crc32_update(crc, &apng[offset + 8..offset + 8 + length]);
+                let stored = u32::from_be_bytes(
+                    apng[offset + 8 + length..offset + 12 + length].try_into().unwrap(),
+                );
+                assert_eq!(stored, crc);
+            }
+            offset += 12 + length;
+        }
+        assert!(seen_actl);
+    }
+
+    #[test]
+    fn patch_errors_without_actl_chunk() {
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        png.extend_from_slice(&png_chunk(b"IHDR", &ihdr_data(2, 2)));
+        png.extend_from_slice(&png_chunk(b"IEND", &[]));
+        assert!(patch_apng_frame_count(&mut png, 1).is_err());
+    }
+
+    #[test]
+    fn patch_errors_on_truncated_chunk() {
+        let mut bad = b"\x89PNG\r\n\x1a\n".to_vec();
+        bad.extend_from_slice(&[0u8, 0, 0, 50]); // claims a 50-byte chunk that never follows
+        assert!(patch_apng_frame_count(&mut bad, 1).is_err());
     }
 
     // -- set tests --
