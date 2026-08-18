@@ -437,6 +437,50 @@ fn apply_diff_to_canvas(
     changed
 }
 
+/// Build the diff-only frame for `date`, rendering each stored image against the
+/// accumulated canvas `current`. Frame 0 is always emitted as the full canvas (the
+/// APNG base frame); any later frame in which no pixel differs from the canvas is
+/// dropped (returns None).
+fn build_apng_frame(
+    history: &HashMap<(u16, u16), TileHistory>,
+    current: &mut PalettedImage,
+    date: DateHours,
+    frame_index: usize,
+    min_x: u16,
+    min_y: u16,
+    max_x: u16,
+    max_y: u16,
+) -> Option<PalettedImage> {
+    let mut frame_img = init_img_from_tile_coords(
+        min_x as i64, min_y as i64, max_x as i64, max_y as i64, palette::TRANSPARENT,
+    );
+    let mut changed = false;
+    for y in min_y..(max_y + 1) {
+        for x in min_x..(max_x + 1) {
+            if let Some(th) = history.get(&(x, y)) {
+                if let Some(img_data) = th.imgs.get(&date) {
+                    let img = img_data.to_paletted().unwrap();
+                    changed |= apply_diff_to_canvas(
+                        &img,
+                        &mut frame_img,
+                        current,
+                        (x - min_x) as i64,
+                        (y - min_y) as i64,
+                        palette::WHITE,
+                    );
+                }
+            }
+        }
+    }
+    if frame_index == 0 {
+        Some(current.clone())
+    } else if changed {
+        Some(frame_img)
+    } else {
+        None
+    }
+}
+
 /// Streaming CRC-32 (IEEE, reflected polynomial 0xEDB88320), as required by the
 /// PNG spec for chunk CRCs. Chain calls by feeding the previous result back in,
 /// starting with 0. Used to fix the acTL CRC after patching its frame count.
@@ -543,6 +587,68 @@ mod tests {
         assert!(apply_diff_to_canvas(&right, &mut frame, &mut canvas, 1, 0, palette::WHITE));
         assert_eq!(canvas.indices, vec![5, 5, 7, 5, 5, 5, 5, 5]);
         assert_eq!(frame.indices, vec![0, 0, 7, 0, 0, 0, 0, 0]);
+    }
+
+    // -- build_apng_frame tests --
+
+    fn th_from_entries(entries: &[(u32, PalettedImage)]) -> TileHistory {
+        let mut th = TileHistory { imgs: HashMap::new() };
+        for (date, img) in entries {
+            th.imgs.insert(DateHours(*date), img.to_compressed_bytes().unwrap());
+        }
+        th
+    }
+
+    #[test]
+    fn build_frame_0_is_full_canvas() {
+        let big = make_paletted(1000, 1000, 10);
+        let mut history = HashMap::new();
+        history.insert((0u16, 0u16), th_from_entries(&[(0, big)]));
+        let mut current = init_img_from_tile_coords(0, 0, 0, 0, palette::WHITE);
+        let frame = build_apng_frame(&history, &mut current, DateHours(0), 0, 0, 0, 0, 0).unwrap();
+        assert_eq!(frame.indices, vec![10; 1_000_000]);
+        assert_eq!(current.indices, vec![10; 1_000_000]);
+    }
+
+    #[test]
+    fn build_frame_identical_to_canvas_is_none() {
+        let mut history = HashMap::new();
+        history.insert((0u16, 0u16), th_from_entries(&[
+            (0, make_paletted(1000, 1000, 10)),
+            (5, make_paletted(1000, 1000, 10)),
+        ]));
+        let mut current = init_img_from_tile_coords(0, 0, 0, 0, palette::WHITE);
+        assert!(build_apng_frame(&history, &mut current, DateHours(0), 0, 0, 0, 0, 0).is_some());
+        assert!(build_apng_frame(&history, &mut current, DateHours(5), 1, 0, 0, 0, 0).is_none());
+        assert_eq!(current.indices, vec![10; 1_000_000]);
+    }
+
+    #[test]
+    fn build_frame_full_base_diff_from_canvas_emits_changed_pixels() {
+        // makebase-style boundary base: mostly identical to the canvas, a few pixels differ.
+        let base = make_paletted_with_changes(1000, 1000, 10, &[(0, 7), (1000, 7)]);
+        let mut history = HashMap::new();
+        history.insert((0u16, 0u16), th_from_entries(&[
+            (0, make_paletted(1000, 1000, 10)),
+            (168, base),
+        ]));
+        let mut current = init_img_from_tile_coords(0, 0, 0, 0, palette::WHITE);
+        build_apng_frame(&history, &mut current, DateHours(0), 0, 0, 0, 0, 0);
+        let frame = build_apng_frame(&history, &mut current, DateHours(168), 1, 0, 0, 0, 0).unwrap();
+        assert_eq!(frame.indices[0], 7);
+        assert_eq!(frame.indices[1000], 7);
+        assert_eq!(frame.indices[1], palette::TRANSPARENT);
+        assert_eq!(current.indices[0], 7);
+    }
+
+    #[test]
+    fn build_frame_with_no_image_at_date_is_none() {
+        let mut history = HashMap::new();
+        history.insert((0u16, 0u16), th_from_entries(&[(0, make_paletted(1000, 1000, 10))]));
+        let mut current = init_img_from_tile_coords(0, 0, 0, 0, palette::WHITE);
+        build_apng_frame(&history, &mut current, DateHours(0), 0, 0, 0, 0, 0);
+        assert!(build_apng_frame(&history, &mut current, DateHours(99), 1, 0, 0, 0, 0).is_none());
+        assert_eq!(current.indices, vec![10; 1_000_000]);
     }
 
     // -- set tests --
