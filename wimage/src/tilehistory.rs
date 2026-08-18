@@ -307,7 +307,6 @@ pub fn apng_from_history(history: HashMap<(u16, u16), TileHistory>, frame_delay_
     let mut max_x: u16 = 0;
     let mut max_y: u16 = 0;
 
-
     for (x, y) in history.keys() {
         let (x, y) = (*x, *y);
         let th = history.get(&(x, y)).unwrap();
@@ -347,57 +346,35 @@ pub fn apng_from_history(history: HashMap<(u16, u16), TileHistory>, frame_delay_
     let pal = &palette::PNG_PALETTE_NO_DIFF;
     encoder.set_palette(&pal.0);
     encoder.set_trns(pal.1.as_slice());
+    // Placeholder count: empty frames are skipped, so the real count is patched
+    // into the acTL chunk after generation.
     encoder.set_animated(sorted_dates.len() as u32, 0)?;
     encoder.set_blend_op(png::BlendOp::Over)?;
     encoder.set_frame_delay(frame_delay_ms, 1000)?;
     let mut writer = encoder.write_header()?;
 
-    let mut first_frame = true;
-    for date in sorted_dates {
-        let mut frame_img = if first_frame { 
-            first_frame = false;
-            target_img.clone()
-        } else { 
-            init_img_from_tile_coords(min_x as i64, min_y as i64, max_x as i64, max_y as i64, palette::TRANSPARENT)
-        };
-        for y in min_y..(max_y+1) {
-            for x in min_x..(max_x+1) {
-                if let Some(th) = history.get(&(x, y)) {
-                    if let Some(img_data) = th.imgs.get(&date) {
-                        let img = img_data.to_paletted().unwrap();
-                        apply_diff_img(&img, &mut frame_img, (x - min_x) as i64, (y - min_y) as i64, palette::WHITE);
-                    }
-                }
-            }
+    let mut current = target_img.clone();
+    let mut frame_count: u32 = 0;
+    for (frame_index, date) in sorted_dates.iter().enumerate() {
+        if let Some(frame) = build_apng_frame(
+            &history,
+            &mut current,
+            *date,
+            frame_index,
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+        ) {
+            writer.write_image_data(&frame.indices)?;
+            frame_count += 1;
         }
-
-        writer.write_image_data(&frame_img.indices)?;
     }
-
     writer.finish()?;
+
+    // Frame 0 is always emitted, so frame_count >= 1.
+    patch_apng_frame_count(&mut out, frame_count)?;
     Ok(out)
-}
-
-fn apply_diff_img(src: &PalettedImage, dst: &mut PalettedImage, tile_x_offset: i64, tile_y_offset: i64, background: u8) {
-    let offset_x = (tile_x_offset * 1000) as usize;
-    let offset_y = (tile_y_offset * 1000) as usize;
-    for y in 0..src.height {
-        let src_row_start = y * src.width;
-        let dst_row_start = (y + offset_y) * dst.width + offset_x;
-
-        for x in 0..src.width {
-            let v = src.indices[src_row_start + x];
-            if v != palette::DIFF_NO_CHANGE {
-                if v == palette::TRANSPARENT {
-                    dst.indices[dst_row_start + x] = background;
-                } else {
-                    dst.indices[dst_row_start + x] = v;
-                }
-            } else {
-                dst.indices[dst_row_start + x] = palette::TRANSPARENT;
-            }
-        }
-    }
 }
 
 /// Apply `src` (a tile image or diff image) to both the emitted frame `dst` and the
@@ -751,6 +728,69 @@ mod tests {
         let mut bad = b"\x89PNG\r\n\x1a\n".to_vec();
         bad.extend_from_slice(&[0u8, 0, 0, 50]); // claims a 50-byte chunk that never follows
         assert!(patch_apng_frame_count(&mut bad, 1).is_err());
+    }
+
+    // -- apng_from_history integration tests --
+
+    #[test]
+    fn apng_skips_unchanged_frames_and_patches_count() {
+        // Single tile timeline with a seeded-style boundary and a diff:
+        //   0   : full image all 10                      -> frame 0 (kept)
+        //   10  : full image all 10 (identical)          -> skipped
+        //   20  : all 10 except (0,0)=12                 -> frame (only that pixel)
+        //   500 : all 12                                 -> frame (10s -> 12s)
+        let mut history = HashMap::new();
+        history.insert((0u16, 0u16), th_from_entries(&[
+            (0, make_paletted(1000, 1000, 10)),
+            (10, make_paletted(1000, 1000, 10)),
+            (20, make_paletted_with_changes(1000, 1000, 10, &[(0, 12)])),
+            (500, make_paletted(1000, 1000, 12)),
+        ]));
+
+        let apng = apng_from_history(history, 200).unwrap();
+
+        // 1. acTL num_frames is patched to the number of actually-written frames,
+        //    and one fcTL chunk is present per written frame.
+        assert_eq!(actl_num_frames(&apng), 3);
+        assert_eq!(chunk_count(&apng, b"fcTL"), 3);
+
+        // 2. The output decodes as a valid animated PNG with the same frame count.
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&apng)).read_info().unwrap();
+        assert_eq!(reader.info().animation_control.as_ref().unwrap().num_frames, 3);
+        let mut frames = 0;
+        let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
+        loop {
+            match reader.next_frame(&mut buf) {
+                Ok(_) => frames += 1,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(frames, 3);
+    }
+
+    fn chunk_count(data: &[u8], chunk_type: &[u8; 4]) -> usize {
+        let mut count = 0;
+        let mut offset = 8;
+        while offset + 12 <= data.len() {
+            let length = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            if &data[offset + 4..offset + 8] == chunk_type.as_slice() {
+                count += 1;
+            }
+            offset += 12 + length;
+        }
+        count
+    }
+
+    fn actl_num_frames(data: &[u8]) -> u32 {
+        let mut offset = 8;
+        while offset + 12 <= data.len() {
+            let length = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+            if &data[offset + 4..offset + 8] == b"acTL" {
+                return u32::from_be_bytes(data[offset + 8..offset + 12].try_into().unwrap());
+            }
+            offset += 12 + length;
+        }
+        panic!("acTL chunk not found");
     }
 
     // -- set tests --
