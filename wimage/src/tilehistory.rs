@@ -400,6 +400,20 @@ fn apply_diff_img(src: &PalettedImage, dst: &mut PalettedImage, tile_x_offset: i
     }
 }
 
+/// Streaming CRC-32 (IEEE, reflected polynomial 0xEDB88320), as required by the
+/// PNG spec for chunk CRCs. Chain calls by feeding the previous result back in,
+/// starting with 0. Used to fix the acTL CRC after patching its frame count.
+fn crc32_update(crc: u32, data: &[u8]) -> u32 {
+    let mut crc = crc ^ 0xFFFF_FFFF;
+    for &byte in data {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    crc ^ 0xFFFF_FFFF
+}
+
 // ===================== Tests for TileHistory =====================
 
 #[cfg(test)]
@@ -416,6 +430,26 @@ mod tests {
             img.indices[idx] = val;
         }
         img
+    }
+
+    // -- crc32 tests --
+
+    #[test]
+    fn crc32_matches_known_vector() {
+        // Standard CRC-32 check value for the ASCII string "123456789".
+        assert_eq!(crc32_update(0, b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn crc32_chains_across_calls() {
+        let data: Vec<u8> = b"acTL".to_vec().into_iter()
+            .chain(2u32.to_be_bytes())
+            .chain(0u32.to_be_bytes())
+            .collect();
+        let one_shot = crc32_update(0, &data);
+        let first = crc32_update(0, b"acTL");
+        let chained = crc32_update(crc32_update(first, &2u32.to_be_bytes()), &0u32.to_be_bytes());
+        assert_eq!(one_shot, chained);
     }
 
     // -- set tests --
