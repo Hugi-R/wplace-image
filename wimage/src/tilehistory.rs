@@ -400,6 +400,43 @@ fn apply_diff_img(src: &PalettedImage, dst: &mut PalettedImage, tile_x_offset: i
     }
 }
 
+/// Apply `src` (a tile image or diff image) to both the emitted frame `dst` and the
+/// accumulated canvas, but only where the resulting value differs from the canvas.
+/// Pixels already matching the canvas stay transparent in the frame, so the APNG
+/// only ever records real canvas changes. Returns whether any pixel changed.
+fn apply_diff_to_canvas(
+    src: &PalettedImage,
+    dst: &mut PalettedImage,
+    canvas: &mut PalettedImage,
+    tile_x_offset: i64,
+    tile_y_offset: i64,
+    background: u8,
+) -> bool {
+    assert!(dst.width == canvas.width && dst.height == canvas.height);
+    let offset_x = tile_x_offset as usize * src.width;
+    let offset_y = tile_y_offset as usize * src.height;
+
+    let mut changed = false;
+    for y in 0..src.height {
+        let src_row = y * src.width;
+        let dst_row = (y + offset_y) * dst.width + offset_x;
+        for x in 0..src.width {
+            let v = src.indices[src_row + x];
+            if v == palette::DIFF_NO_CHANGE {
+                continue;
+            }
+            let value = if v == palette::TRANSPARENT { background } else { v };
+            let pos = dst_row + x;
+            if canvas.indices[pos] != value {
+                canvas.indices[pos] = value;
+                dst.indices[pos] = value;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 /// Streaming CRC-32 (IEEE, reflected polynomial 0xEDB88320), as required by the
 /// PNG spec for chunk CRCs. Chain calls by feeding the previous result back in,
 /// starting with 0. Used to fix the acTL CRC after patching its frame count.
@@ -450,6 +487,62 @@ mod tests {
         let first = crc32_update(0, b"acTL");
         let chained = crc32_update(crc32_update(first, &2u32.to_be_bytes()), &0u32.to_be_bytes());
         assert_eq!(one_shot, chained);
+    }
+
+    // -- apply_diff_to_canvas tests --
+
+    #[test]
+    fn canvas_writes_changed_pixels_only() {
+        let src = make_paletted_with_changes(2, 2, palette::WHITE, &[(0, 10), (3, 20)]);
+        let mut frame = make_paletted(2, 2, palette::TRANSPARENT);
+        let mut canvas = make_paletted(2, 2, palette::WHITE);
+        assert!(apply_diff_to_canvas(&src, &mut frame, &mut canvas, 0, 0, palette::WHITE));
+        assert_eq!(canvas.indices, vec![10, 5, 5, 20]);
+        assert_eq!(frame.indices, vec![10, 0, 0, 20]);
+    }
+
+    #[test]
+    fn canvas_identical_image_is_noop() {
+        let src = make_paletted(2, 2, palette::WHITE);
+        let mut frame = make_paletted(2, 2, palette::TRANSPARENT);
+        let mut canvas = make_paletted(2, 2, palette::WHITE);
+        assert!(!apply_diff_to_canvas(&src, &mut frame, &mut canvas, 0, 0, palette::WHITE));
+        assert_eq!(frame.indices, vec![0; 4]);
+        assert_eq!(canvas.indices, vec![palette::WHITE; 4]);
+    }
+
+    #[test]
+    fn canvas_no_change_pixels_preserve_canvas() {
+        // DIFF_NO_CHANGE must not overwrite the canvas and emits transparent.
+        let src = make_paletted_with_changes(2, 2, palette::DIFF_NO_CHANGE, &[(0, 9)]);
+        let mut frame = make_paletted(2, 2, palette::TRANSPARENT);
+        let mut canvas = make_paletted_with_changes(2, 2, palette::WHITE, &[(1, 3)]);
+        assert!(apply_diff_to_canvas(&src, &mut frame, &mut canvas, 0, 0, palette::WHITE));
+        assert_eq!(frame.indices, vec![9, 0, 0, 0]);
+        assert_eq!(canvas.indices, vec![9, 3, 5, 5]);
+    }
+
+    #[test]
+    fn canvas_transparent_maps_to_background() {
+        let src = make_paletted(2, 2, palette::TRANSPARENT);
+        let mut frame = make_paletted(2, 2, palette::TRANSPARENT);
+        let mut canvas = make_paletted(2, 2, palette::BLACK);
+        assert!(apply_diff_to_canvas(&src, &mut frame, &mut canvas, 0, 0, palette::WHITE));
+        assert_eq!(frame.indices, vec![palette::WHITE; 4]);
+        assert_eq!(canvas.indices, vec![palette::WHITE; 4]);
+    }
+
+    #[test]
+    fn canvas_places_tiles_at_offset() {
+        // 2x1 grid of 2x2 tiles => canvas 4x2; change a pixel in the right tile.
+        let left = make_paletted(2, 2, palette::WHITE);
+        let right = make_paletted_with_changes(2, 2, palette::WHITE, &[(0, 7)]);
+        let mut frame = make_paletted(4, 2, palette::TRANSPARENT);
+        let mut canvas = make_paletted(4, 2, palette::WHITE);
+        assert!(!apply_diff_to_canvas(&left, &mut frame, &mut canvas, 0, 0, palette::WHITE));
+        assert!(apply_diff_to_canvas(&right, &mut frame, &mut canvas, 1, 0, palette::WHITE));
+        assert_eq!(canvas.indices, vec![5, 5, 7, 5, 5, 5, 5, 5]);
+        assert_eq!(frame.indices, vec![0, 0, 7, 0, 0, 0, 0, 0]);
     }
 
     // -- set tests --
